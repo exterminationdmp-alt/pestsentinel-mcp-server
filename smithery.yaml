@@ -1,0 +1,22 @@
+name: pestsentinel-mcp-server
+version: "1.0.0"
+description: Real-time pest risk intelligence for 500+ zones across the US and Canada. Weekly scores for 15 pest types updated every Monday. Built for pest control operators, PE roll-ups, and anyone who needs to know where pest pressure is rising before it peaks.
+
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required:
+      - supabaseAnonKey
+    properties:
+      supabaseAnonKey:
+        type: string
+        description: Your Pest Sentinel API key. Get yours at pestsentinel.ai
+  commandFunction: |-
+    (config) => ({
+      command: "node",
+      args: ["dist/index.js"],
+      env: {
+        SUPABASE_ANON_KEY: config.supabaseAnonKey
+      }
+    })
