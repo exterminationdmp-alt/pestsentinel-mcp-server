@@ -31,15 +31,17 @@ import { registerZoneTools } from "./tools/zones.js";
 import { registerRiskScoreTools } from "./tools/risk-scores.js";
 import { registerPestTools } from "./tools/pests.js";
 
-const server = new McpServer({
-  name: "pestsentinel-mcp-server",
-  version: "1.0.0",
-});
-
-// Register all tools
-registerZoneTools(server);
-registerRiskScoreTools(server);
-registerPestTools(server);
+/** Create a fully-configured McpServer instance with all tools registered */
+function createServer(): McpServer {
+  const srv = new McpServer({
+    name: "pestsentinel-mcp-server",
+    version: "1.0.0",
+  });
+  registerZoneTools(srv);
+  registerRiskScoreTools(srv);
+  registerPestTools(srv);
+  return srv;
+}
 
 // ── Transport ─────────────────────────────────────────────────────────────────
 
@@ -52,6 +54,7 @@ async function runStdio(): Promise<void> {
     process.exit(1);
   }
 
+  const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("Pest Sentinel MCP server running via stdio");
@@ -76,14 +79,41 @@ async function runHTTP(): Promise<void> {
     });
   });
 
+  // Health check for Railway
+  app.get("/health", (_req, res) => {
+    res.json({ status: "ok", uptime: process.uptime() });
+  });
+
   app.post("/mcp", async (req, res) => {
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
-    res.on("close", () => transport.close());
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
+    try {
+      // The MCP SDK throws "Already connected to a transport" if server.connect()
+      // is called twice on the same instance. In stateless HTTP mode (no sessions),
+      // each request gets its own McpServer + transport pair.
+      const perRequestServer = createServer();
+
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      });
+
+      res.on("close", () => {
+        transport.close().catch(() => {});
+        perRequestServer.server.close().catch(() => {});
+      });
+
+      await perRequestServer.server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      console.error("[mcp] Request error:", error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    }
+  });
+
+  // Catch unhandled rejections so the process doesn't crash
+  process.on("unhandledRejection", (reason) => {
+    console.error("[mcp] Unhandled rejection:", reason);
   });
 
   const port = parseInt(process.env.PORT ?? "3000", 10);
